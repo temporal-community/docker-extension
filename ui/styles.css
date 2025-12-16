@@ -81,6 +81,10 @@ body {
   margin-right: var(--spacing-lg);
 }
 
+.spacer {
+  flex: 1;
+}
+
 /* Buttons */
 button {
   padding: var(--spacing-sm) var(--spacing-lg);
@@ -106,19 +110,18 @@ button:disabled {
 }
 
 .clear-data-btn {
-  background: rgba(244, 67, 54, 0.15);
+  background: var(--color-space-black);
   border: 1px solid rgba(244, 67, 54, 0.3);
   color: #ff6b6b;
 }
 
 .clear-data-btn:hover {
-  background: rgba(244, 67, 54, 0.25);
+  background: rgba(244, 67, 54, 0.15);
 }
 
 .logs-btn {
   background: var(--color-primary-alpha-15);
   border: 1px solid var(--color-primary-alpha-20-white);
-  margin-left: var(--spacing-lg);
 }
 
 .logs-btn:hover {
@@ -127,11 +130,11 @@ button:disabled {
 
 /* Status */
 .status {
-  margin-left: auto;
   display: flex;
   align-items: center;
   gap: var(--spacing-sm);
   color: var(--color-text-primary);
+  margin-left: var(--spacing-lg);
 }
 
 .indicator {

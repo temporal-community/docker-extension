@@ -54,6 +54,16 @@ function addLog(msg, type = 'info') {
   log.scrollTop = log.scrollHeight;
 }
 
+// Loading overlay helpers
+function showLoading(text) {
+  loadingText.textContent = text;
+  loadingOverlay.classList.add('show');
+}
+
+function hideLoading() {
+  loadingOverlay.classList.remove('show');
+}
+
 // Wait for Temporal to be ready
 async function waitForTemporalReady(maxAttempts = 30) {
   for (let i = 0; i < maxAttempts; i++) {
@@ -69,6 +79,83 @@ async function waitForTemporalReady(maxAttempts = 30) {
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
   return false;
+}
+
+// Start Temporal server and nginx proxy
+async function startTemporalServer() {
+  // Create volume for data persistence (ignore if exists)
+  showLoading('Creating data volume...');
+  try {
+    await dd.docker.cli.exec('volume', ['create', 'temporal-dev-data']);
+    addLog('Volume created', 'success');
+  } catch (e) {
+    // Volume likely already exists, which is expected
+    const msg = e.stderr || e.message || 'Unknown error';
+    if (msg.includes('already exists')) {
+      addLog('Using existing volume', 'info');
+    } else {
+      addLog(`Volume creation note: ${msg}`, 'info');
+    }
+  }
+
+  // Set volume permissions to allow Temporal to write
+  showLoading('Setting volume permissions...');
+  try {
+    await dd.docker.cli.exec('run', [
+      '--rm',
+      '-v', 'temporal-dev-data:/data',
+      'alpine',
+      'chmod', '777', '/data'
+    ]);
+    addLog('Volume permissions set', 'success');
+  } catch (e) {
+    // Log error details but continue - permissions may already be correct
+    const msg = e.stderr || e.message || 'Unknown error';
+    addLog(`Permission warning: ${msg}`, 'info');
+  }
+
+  // Create network for Temporal and nginx (ignore if exists)
+  showLoading('Creating network...');
+  try {
+    await dd.docker.cli.exec('network', ['create', 'temporal-network']);
+    addLog('Network created', 'success');
+  } catch (e) {
+    // Network likely already exists, which is expected
+    const msg = e.stderr || e.message || 'Unknown error';
+    if (msg.includes('already exists')) {
+      addLog('Using existing network', 'info');
+    } else {
+      addLog(`Network creation note: ${msg}`, 'info');
+    }
+  }
+
+  // Start Temporal server
+  showLoading('Starting Temporal server...');
+  await dd.docker.cli.exec('run', [
+    '-d',
+    '--name', 'temporal-dev',
+    '--network', 'temporal-network',
+    '-p', '7233:7233',
+    '-p', '8233:8233',
+    '-v', 'temporal-dev-data:/data',
+    'temporalio/temporal:latest',
+    'server', 'start-dev',
+    '--ip', '0.0.0.0',
+    '--ui-ip', '0.0.0.0',
+    '--db-filename', '/data/temporal.db'
+  ]);
+  addLog('Temporal container started', 'success');
+
+  // Start nginx proxy to strip X-Frame-Options
+  showLoading('Starting proxy...');
+  await dd.docker.cli.exec('run', [
+    '-d',
+    '--name', 'temporal-nginx',
+    '--network', 'temporal-network',
+    '-p', '8234:8234',
+    'temporal-nginx-proxy:latest'
+  ]);
+  addLog('Nginx proxy started', 'success');
 }
 
 // Status check function
@@ -91,7 +178,10 @@ function updateUI(running) {
     indicator.classList.add('running');
     statusText.textContent = 'Running';
     startBtn.style.display = 'none';
+    startBtn.disabled = false;
     stopBtn.style.display = 'inline-block';
+    stopBtn.disabled = false;
+    clearDataBtn.disabled = false;
 
     // Load iframe only if not already loaded or loading
     // Check both with and without trailing slash due to browser URL normalization
@@ -101,8 +191,7 @@ function updateUI(running) {
 
     if (!iframeLoading && !isAlreadyLoaded) {
       iframeLoading = true;
-      loadingText.textContent = 'Loading Temporal UI...';
-      loadingOverlay.classList.add('show');
+      showLoading('Loading Temporal UI...');
       // Load immediately - the iframe onload handler will hide the loading overlay
       temporalFrame.src = targetUrl;
       addLog('Loading Temporal UI...', 'info');
@@ -111,9 +200,12 @@ function updateUI(running) {
     indicator.classList.remove('running');
     statusText.textContent = 'Stopped';
     startBtn.style.display = 'inline-block';
+    startBtn.disabled = false;
     stopBtn.style.display = 'none';
+    stopBtn.disabled = false;
+    clearDataBtn.disabled = false;
     temporalFrame.src = 'about:blank';
-    loadingOverlay.classList.remove('show');
+    hideLoading();
     iframeLoading = false;
   }
 }
@@ -122,8 +214,8 @@ function updateUI(running) {
 startBtn.onclick = async function() {
   addLog('Starting Temporal server...', 'info');
   startBtn.disabled = true;
-  loadingText.textContent = 'Preparing to start...';
-  loadingOverlay.classList.add('show');
+  clearDataBtn.disabled = true;
+  showLoading('Preparing to start...');
 
   // Reset iframe to ensure it reloads
   temporalFrame.src = 'about:blank';
@@ -132,89 +224,34 @@ startBtn.onclick = async function() {
   try {
     // Clean up any existing containers first
     try {
-      loadingText.textContent = 'Cleaning up existing containers...';
+      showLoading('Cleaning up existing containers...');
       await dd.docker.cli.exec('rm', ['-f', 'temporal-dev', 'temporal-nginx']);
       addLog('Cleaned up existing containers', 'info');
     } catch (e) {
-      // Containers don't exist, which is fine
+      // Containers don't exist, which is expected
     }
 
-    // Create volume for data persistence (ignore if exists)
-    loadingText.textContent = 'Creating data volume...';
-    try {
-      await dd.docker.cli.exec('volume', ['create', 'temporal-dev-data']);
-      addLog('Volume created', 'success');
-    } catch (e) {
-      addLog('Using existing volume', 'info');
-    }
-
-    // Set volume permissions to allow Temporal to write
-    loadingText.textContent = 'Setting volume permissions...';
-    try {
-      await dd.docker.cli.exec('run', [
-        '--rm',
-        '-v', 'temporal-dev-data:/data',
-        'alpine',
-        'chmod', '777', '/data'
-      ]);
-      addLog('Volume permissions set', 'success');
-    } catch (e) {
-      addLog('Failed to set permissions, continuing...', 'info');
-    }
-
-    // Create network for Temporal and nginx (ignore if exists)
-    loadingText.textContent = 'Creating network...';
-    try {
-      await dd.docker.cli.exec('network', ['create', 'temporal-network']);
-      addLog('Network created', 'success');
-    } catch (e) {
-      addLog('Using existing network', 'info');
-    }
-
-    // Start Temporal server
-    loadingText.textContent = 'Starting Temporal server...';
-    await dd.docker.cli.exec('run', [
-      '-d',
-      '--name', 'temporal-dev',
-      '--network', 'temporal-network',
-      '-p', '7233:7233',
-      '-p', '8233:8233',
-      '-v', 'temporal-dev-data:/data',
-      'temporalio/temporal:latest',
-      'server', 'start-dev',
-      '--ip', '0.0.0.0',
-      '--ui-ip', '0.0.0.0',
-      '--db-filename', '/data/temporal.db'
-    ]);
-    addLog('Temporal container started', 'success');
+    // Start Temporal server and nginx proxy
+    await startTemporalServer();
     addLog('Ports: 7233 (gRPC), 8233 (Web UI), 8234 (Proxy)', 'info');
 
-    // Start nginx proxy to strip X-Frame-Options
-    loadingText.textContent = 'Starting proxy...';
-    await dd.docker.cli.exec('run', [
-      '-d',
-      '--name', 'temporal-nginx',
-      '--network', 'temporal-network',
-      '-p', '8234:8234',
-      'temporal-nginx-proxy:latest'
-    ]);
-    addLog('Nginx proxy started', 'success');
-
-    loadingText.textContent = 'Waiting for Temporal to be ready...';
-    // Wait for Temporal to be ready
+    showLoading('Waiting for Temporal to be ready...');
     const isReady = await waitForTemporalReady();
     if (isReady) {
       addLog('Temporal is ready', 'success');
       checkStatus();
     } else {
       addLog('Temporal failed to start within 30 seconds', 'error');
-      loadingOverlay.classList.remove('show');
+      hideLoading();
       startBtn.disabled = false;
+      clearDataBtn.disabled = false;
     }
   } catch (error) {
-    addLog('Error: ' + error.message, 'error');
-    loadingOverlay.classList.remove('show');
+    const msg = error.stderr || error.message || 'Unknown error';
+    addLog(`Error: ${msg}`, 'error');
+    hideLoading();
     startBtn.disabled = false;
+    clearDataBtn.disabled = false;
   }
 };
 
@@ -222,6 +259,7 @@ startBtn.onclick = async function() {
 stopBtn.onclick = async function() {
   addLog('Stopping Temporal server...', 'info');
   stopBtn.disabled = true;
+  clearDataBtn.disabled = true;
 
   try {
     // Stop and remove both containers
@@ -251,40 +289,55 @@ confirmClearBtn.onclick = async function() {
   confirmClearBtn.disabled = true;
   stopBtn.disabled = true;
   startBtn.disabled = true;
+  clearDataBtn.disabled = true;
   clearDataModal.classList.remove('show');
-  loadingText.textContent = 'Clearing history...';
-  loadingOverlay.classList.add('show');
+  showLoading('Clearing history...');
 
   try {
     // Stop and remove both containers
     try {
-      loadingText.textContent = 'Stopping containers...';
+      showLoading('Stopping containers...');
       await dd.docker.cli.exec('rm', ['-f', 'temporal-dev', 'temporal-nginx']);
       addLog('Containers stopped and removed', 'success');
     } catch (e) {
-      addLog('No containers to remove', 'info');
+      const msg = e.stderr || e.message || 'Unknown error';
+      if (msg.includes('No such container') || msg.includes('not found')) {
+        addLog('No containers to remove', 'info');
+      } else {
+        addLog(`Container removal note: ${msg}`, 'info');
+      }
     }
 
     // Remove the data volume
     try {
-      loadingText.textContent = 'Removing data volume...';
+      showLoading('Removing data volume...');
       await dd.docker.cli.exec('volume', ['rm', 'temporal-dev-data']);
       addLog('Data volume removed - all workflow data deleted', 'success');
     } catch (e) {
-      addLog('Volume already removed or does not exist', 'info');
+      const msg = e.stderr || e.message || 'Unknown error';
+      if (msg.includes('No such volume') || msg.includes('not found')) {
+        addLog('Volume already removed or does not exist', 'info');
+      } else {
+        addLog(`Volume removal note: ${msg}`, 'info');
+      }
     }
 
     // Remove the network
     try {
-      loadingText.textContent = 'Removing network...';
+      showLoading('Removing network...');
       await dd.docker.cli.exec('network', ['rm', 'temporal-network']);
       addLog('Network removed', 'success');
     } catch (e) {
-      addLog('Network already removed or does not exist', 'info');
+      const msg = e.stderr || e.message || 'Unknown error';
+      if (msg.includes('not found')) {
+        addLog('Network already removed or does not exist', 'info');
+      } else {
+        addLog(`Network removal note: ${msg}`, 'info');
+      }
     }
 
     addLog('History cleared successfully', 'success');
-    loadingText.textContent = 'Restarting server...';
+    showLoading('Restarting server...');
 
     // Reset iframe to ensure it reloads
     temporalFrame.src = 'about:blank';
@@ -292,89 +345,32 @@ confirmClearBtn.onclick = async function() {
 
     // Restart the server
     try {
-      // Create volume for data persistence
-      loadingText.textContent = 'Creating data volume...';
-      try {
-        await dd.docker.cli.exec('volume', ['create', 'temporal-dev-data']);
-        addLog('Volume created', 'success');
-      } catch (e) {
-        addLog('Using existing volume', 'info');
-      }
-
-      // Set volume permissions to allow Temporal to write
-      loadingText.textContent = 'Setting volume permissions...';
-      try {
-        await dd.docker.cli.exec('run', [
-          '--rm',
-          '-v', 'temporal-dev-data:/data',
-          'alpine',
-          'chmod', '777', '/data'
-        ]);
-        addLog('Volume permissions set', 'success');
-      } catch (e) {
-        addLog('Failed to set permissions, continuing...', 'info');
-      }
-
-      // Create network
-      loadingText.textContent = 'Creating network...';
-      try {
-        await dd.docker.cli.exec('network', ['create', 'temporal-network']);
-        addLog('Network created', 'success');
-      } catch (e) {
-        addLog('Using existing network', 'info');
-      }
-
-      // Start Temporal server
-      loadingText.textContent = 'Starting Temporal server...';
-      await dd.docker.cli.exec('run', [
-        '-d',
-        '--name', 'temporal-dev',
-        '--network', 'temporal-network',
-        '-p', '7233:7233',
-        '-p', '8233:8233',
-        '-v', 'temporal-dev-data:/data',
-        'temporalio/temporal:latest',
-        'server', 'start-dev',
-        '--ip', '0.0.0.0',
-        '--ui-ip', '0.0.0.0',
-        '--db-filename', '/data/temporal.db'
-      ]);
-      addLog('Temporal container started', 'success');
-
-      // Start nginx proxy
-      loadingText.textContent = 'Starting proxy...';
-      await dd.docker.cli.exec('run', [
-        '-d',
-        '--name', 'temporal-nginx',
-        '--network', 'temporal-network',
-        '-p', '8234:8234',
-        'temporal-nginx-proxy:latest'
-      ]);
-      addLog('Nginx proxy started', 'success');
-
+      await startTemporalServer();
       addLog('Server restarted with fresh database', 'success');
-      loadingText.textContent = 'Waiting for Temporal to be ready...';
-      // Wait for Temporal to be ready
+
+      showLoading('Waiting for Temporal to be ready...');
       const isReady = await waitForTemporalReady();
       if (isReady) {
         addLog('Temporal is ready', 'success');
         checkStatus();
       } else {
         addLog('Temporal failed to start within 30 seconds', 'error');
-        loadingOverlay.classList.remove('show');
+        hideLoading();
       }
       confirmClearBtn.disabled = false;
     } catch (error) {
-      addLog('Error restarting server: ' + error.message, 'error');
-      loadingOverlay.classList.remove('show');
+      const msg = error.stderr || error.message || 'Unknown error';
+      addLog(`Error restarting server: ${msg}`, 'error');
+      hideLoading();
       confirmClearBtn.disabled = false;
-      checkStatus(); // Update button states
+      checkStatus();
     }
   } catch (error) {
-    addLog('Error clearing history: ' + error.message, 'error');
-    loadingOverlay.classList.remove('show');
+    const msg = error.stderr || error.message || 'Unknown error';
+    addLog(`Error clearing history: ${msg}`, 'error');
+    hideLoading();
     confirmClearBtn.disabled = false;
-    checkStatus(); // Update button states
+    checkStatus();
   }
 };
 
