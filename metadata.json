@@ -1,0 +1,10 @@
+{
+  "icon": "temporal-icon.svg",
+  "ui": {
+    "dashboard-tab": {
+      "title": "Temporal",
+      "root": "/ui",
+      "src": "index.html"
+    }
+  }
+}

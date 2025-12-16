@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  temporal-dev:
+    image: temporalio/temporal:latest
+    container_name: temporal-dev
+    command: temporal server start-dev --ip 0.0.0.0 --db-filename /data/temporal.db
+    ports:
+      - "7233:7233"  # gRPC
+      - "8233:8233"  # Web UI
+    volumes:
+      - temporal-dev-data:/data
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  temporal-dev-data:
+    name: temporal-dev-data

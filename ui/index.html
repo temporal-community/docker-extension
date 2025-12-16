@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Temporal</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="header">
+    <img src="temporal-logo-horizontal.svg" alt="Temporal" class="logo">
+    <button id="startBtn">Start Server</button>
+    <button id="stopBtn" style="display: none;">Stop Server</button>
+    <button id="clearDataBtn" class="clear-data-btn">Clear Data</button>
+    <button id="logsBtn" class="logs-btn">View Extension Logs</button>
+    <div class="status">
+      <div class="indicator" id="indicator"></div>
+      <span id="statusText">Stopped</span>
+    </div>
+  </div>
+
+  <div class="content">
+    <iframe id="temporalFrame" src="about:blank"></iframe>
+    <div class="loading-overlay" id="loadingOverlay">
+      <div class="spinner"></div>
+      <div class="loading-text" id="loadingText">Loading Temporal UI...</div>
+    </div>
+  </div>
+
+  <div id="logsModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Extension Logs</h3>
+        <button class="close-btn" id="closeLogsBtn">&times;</button>
+      </div>
+      <div id="log"></div>
+    </div>
+  </div>
+
+  <div id="clearDataModal" class="modal">
+    <div class="modal-content modal-confirm">
+      <div class="modal-header">
+        <h3>Clear Temporal Data</h3>
+        <button class="close-btn" id="closeClearDataBtn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="warning-text">This will permanently delete:</p>
+        <ul class="warning-list">
+          <li>All workflow execution history</li>
+          <li>All workflow state data</li>
+          <li>All namespace configurations</li>
+          <li>The entire SQLite database</li>
+        </ul>
+        <p class="warning-text"><strong>This action cannot be undone.</strong></p>
+      </div>
+      <div class="modal-footer">
+        <button id="cancelClearBtn" class="btn-secondary">Cancel</button>
+        <button id="confirmClearBtn" class="btn-danger">Clear All Data</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
