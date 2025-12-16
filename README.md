@@ -1,5 +1,7 @@
 # Temporal Docker Desktop Extension
 
+![Temporal Docker Extension](extension-screenshot.png)
+
 Docker Desktop extension for running Temporal Server locally with persistent SQLite storage.
 
 ## What This Provides
