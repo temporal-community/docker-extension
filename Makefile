@@ -8,7 +8,7 @@ build:
 	docker build --build-arg VERSION=$(VERSION) -t $(IMAGE_NAME):$(VERSION) -t $(IMAGE_NAME):latest .
 
 validate: build
-	docker extension validate -a -s -i $(IMAGE_NAME):$(VERSION)
+	docker extension validate --auto-resolve-tag --errors-only --sdk-compatibility --validate-install-uninstall $(IMAGE_NAME)
 
 install: build
 	docker extension install $(IMAGE_NAME):latest

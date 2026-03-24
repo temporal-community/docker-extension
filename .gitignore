@@ -43,6 +43,7 @@ temp/
 dist/
 build/
 out/
+nginx-proxy.tar
 
 # Backup files
 *.bak

@@ -146,14 +146,25 @@ async function startTemporalServer() {
   ]);
   addLog('Temporal container started', 'success');
 
-  // Start nginx proxy to strip X-Frame-Options
+  // Write nginx config to a volume then start nginx:alpine with it
+  showLoading('Configuring proxy...');
+  const nginxConf = 'events{worker_connections 1024;}http{server{listen 8234;proxy_connect_timeout 60s;proxy_send_timeout 60s;proxy_read_timeout 60s;location/{proxy_pass http://temporal-dev:8233;proxy_set_header Host $host;proxy_set_header X-Real-IP $remote_addr;proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;proxy_set_header X-Forwarded-Proto $scheme;proxy_hide_header X-Frame-Options;proxy_http_version 1.1;proxy_set_header Upgrade $http_upgrade;proxy_set_header Connection "upgrade";proxy_buffering on;proxy_buffer_size 4k;proxy_buffers 8 4k;}}}';
+  await dd.docker.cli.exec('volume', ['create', 'temporal-nginx-config']);
+  await dd.docker.cli.exec('run', [
+    '--rm',
+    '-v', 'temporal-nginx-config:/config',
+    'alpine',
+    'sh', '-c', `printf '%s' '${nginxConf}' > /config/nginx.conf`
+  ]);
   showLoading('Starting proxy...');
   await dd.docker.cli.exec('run', [
     '-d',
     '--name', 'temporal-nginx',
     '--network', 'temporal-network',
     '-p', '8234:8234',
-    'temporal-nginx-proxy:latest'
+    '-v', 'temporal-nginx-config:/etc/nginx/custom',
+    'nginx:alpine',
+    'nginx', '-c', '/etc/nginx/custom/nginx.conf', '-g', 'daemon off;'
   ]);
   addLog('Nginx proxy started', 'success');
 }
@@ -222,10 +233,11 @@ startBtn.onclick = async function() {
   iframeLoading = false;
 
   try {
-    // Clean up any existing containers first
+    // Clean up any existing containers and config volume first
     try {
       showLoading('Cleaning up existing containers...');
       await dd.docker.cli.exec('rm', ['-f', 'temporal-dev', 'temporal-nginx']);
+      await dd.docker.cli.exec('volume', ['rm', '-f', 'temporal-nginx-config']);
       addLog('Cleaned up existing containers', 'info');
     } catch (e) {
       // Containers don't exist, which is expected
@@ -265,6 +277,13 @@ stopBtn.onclick = async function() {
     // Stop and remove both containers
     await dd.docker.cli.exec('rm', ['-f', 'temporal-dev', 'temporal-nginx']);
     addLog('Containers stopped and removed', 'success');
+
+    // Clean up nginx config volume
+    try {
+      await dd.docker.cli.exec('volume', ['rm', 'temporal-nginx-config']);
+    } catch (e) {
+      // Volume may not exist, ignore
+    }
 
     // Clean up network (optional - will fail if still in use)
     try {
@@ -306,6 +325,13 @@ confirmClearBtn.onclick = async function() {
       } else {
         addLog(`Container removal note: ${msg}`, 'info');
       }
+    }
+
+    // Remove nginx config volume
+    try {
+      await dd.docker.cli.exec('volume', ['rm', 'temporal-nginx-config']);
+    } catch (e) {
+      // Volume may not exist, ignore
     }
 
     // Remove the data volume
