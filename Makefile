@@ -1,10 +1,14 @@
-.PHONY: build install uninstall dev
+.PHONY: build install uninstall dev validate
 
 # Extension name
-IMAGE_NAME := temporal-extension
+IMAGE_NAME := temporalio/temporal_docker_extension
+VERSION ?= 1.0.0
 
 build:
-	docker build -t $(IMAGE_NAME):latest .
+	docker build --build-arg VERSION=$(VERSION) -t $(IMAGE_NAME):$(VERSION) -t $(IMAGE_NAME):latest .
+
+validate: build
+	docker extension validate -a -s -i $(IMAGE_NAME):$(VERSION)
 
 install: build
 	docker extension install $(IMAGE_NAME):latest

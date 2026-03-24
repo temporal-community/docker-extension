@@ -1,8 +1,11 @@
 FROM scratch
 
+ARG VERSION=1.0.0
+
 LABEL org.opencontainers.image.title="Temporal" \
     org.opencontainers.image.description="Run Temporal Server locally with persistent SQLite storage" \
-    org.opencontainers.image.vendor="shy" \
+    org.opencontainers.image.vendor="Temporal Technologies" \
+    org.opencontainers.image.version="${VERSION}" \
     com.docker.desktop.extension.api.version=">= 0.3.0" \
     com.docker.desktop.extension.icon="https://raw.githubusercontent.com/temporalio/documentation/main/static/img/favicon.ico" \
     com.docker.extension.detailed-description="Docker Desktop extension for running Temporal Server locally with SQLite persistence" \
