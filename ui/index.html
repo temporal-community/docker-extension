@@ -1,65 +1,12 @@
 <!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>Temporal</title>
-  <link rel="stylesheet" href="styles.css">
-</head>
-<body>
-  <div class="header">
-    <img src="temporal-logo-horizontal.svg" alt="Temporal" class="logo">
-    <div class="spacer"></div>
-    <div class="status">
-      <div class="indicator" id="indicator"></div>
-      <span id="statusText">Stopped</span>
-    </div>
-    <button id="startBtn">Start Server</button>
-    <button id="stopBtn" style="display: none;">Stop Server</button>
-    <button id="clearDataBtn" class="clear-data-btn">Clear History</button>
-    <button id="logsBtn" class="logs-btn">View Extension Logs</button>
-  </div>
-
-  <div class="content">
-    <iframe id="temporalFrame" src="about:blank"></iframe>
-    <div class="loading-overlay" id="loadingOverlay">
-      <div class="spinner"></div>
-      <div class="loading-text" id="loadingText">Loading Temporal UI...</div>
-    </div>
-  </div>
-
-  <div id="logsModal" class="modal">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h3>Extension Logs</h3>
-        <button class="close-btn" id="closeLogsBtn">&times;</button>
-      </div>
-      <div id="log"></div>
-    </div>
-  </div>
-
-  <div id="clearDataModal" class="modal">
-    <div class="modal-content modal-confirm">
-      <div class="modal-header">
-        <h3>Clear Temporal History</h3>
-        <button class="close-btn" id="closeClearDataBtn">&times;</button>
-      </div>
-      <div class="modal-body">
-        <p class="warning-text">This will permanently delete:</p>
-        <ul class="warning-list">
-          <li>All workflow execution history</li>
-          <li>All workflow state data</li>
-          <li>All namespace configurations</li>
-          <li>The entire SQLite database</li>
-        </ul>
-        <p class="warning-text"><strong>The server will restart with a fresh database.</strong></p>
-      </div>
-      <div class="modal-footer">
-        <button id="cancelClearBtn" class="btn-secondary">Cancel</button>
-        <button id="confirmClearBtn" class="btn-danger">Clear History</button>
-      </div>
-    </div>
-  </div>
-
-  <script src="app.js"></script>
-</body>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Temporal</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>

@@ -1,6 +1,7 @@
 # Docker extension build artifacts
 *.docker-extension
 *.tar.gz
+nginx-proxy.tar
 
 # OS files
 .DS_Store
@@ -43,7 +44,11 @@ temp/
 dist/
 build/
 out/
-nginx-proxy.tar
+ui/dist/
+
+# Node
+node_modules/
+ui/node_modules/
 
 # Backup files
 *.bak
