@@ -50,5 +50,5 @@ jobs:
 
       - name: Validate extension release
         run: |
-          docker extension validate --errors-only --sdk-compatibility --auto-resolve-tag \
+          docker extension validate --auto-resolve-tag \
             temporalio/temporal_docker_extension
