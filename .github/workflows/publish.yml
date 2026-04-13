@@ -43,6 +43,11 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
+          labels: |
+            org.opencontainers.image.title=Temporal
+            org.opencontainers.image.description=Run Temporal Server locally with persistent SQLite storage
+            org.opencontainers.image.vendor=Temporal Technologies
+            org.opencontainers.image.version=${{ steps.version.outputs.value }}
           build-args: VERSION=${{ steps.version.outputs.value }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
