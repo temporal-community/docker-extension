@@ -1,7 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { createDockerDesktopClient } from '@docker/extension-api-client';
 import { createTheme, ThemeProvider } from '@mui/material/styles';
-import AppBar from '@mui/material/AppBar';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
@@ -17,11 +16,11 @@ import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
 import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
-import Toolbar from '@mui/material/Toolbar';
 import Typography from '@mui/material/Typography';
 import Tooltip from '@mui/material/Tooltip';
 
-import logoUrl from '../temporal-logo-horizontal.svg?url';
+import logoDarkUrl from './assets/temporal-logo-dark.png';
+import logoLightUrl from './assets/temporal-logo-light.png';
 
 const ddClient = createDockerDesktopClient();
 
@@ -33,9 +32,15 @@ function useDockerTheme() {
   const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
   const injected = window.__ddMuiV5Themes;
   if (injected) {
-    return createTheme(injected[prefersDark ? 'dark' : 'light']);
+    return {
+      theme: createTheme(injected[prefersDark ? 'dark' : 'light']),
+      prefersDark,
+    };
   }
-  return createTheme({ palette: { mode: prefersDark ? 'dark' : 'light' } });
+  return {
+    theme: createTheme({ palette: { mode: prefersDark ? 'dark' : 'light' } }),
+    prefersDark,
+  };
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -114,12 +119,22 @@ export function App() {
 
   const checkStatus = useCallback(async () => {
     try {
-      const result = await ddClient.docker.cli.exec('ps', [
-        '--filter', 'name=temporal-dev', '--format', '{{.Status}}'
+      // Prefer inspect because `.State.Running` is stable across platforms/locales.
+      const inspectResult = await ddClient.docker.cli.exec('container', [
+        'inspect', '--format', '{{.State.Running}}', 'temporal-dev',
       ]);
-      setRunning(Boolean(result.stdout?.includes('Up')));
+      const runningValue = inspectResult.stdout?.trim().toLowerCase();
+      setRunning(runningValue === 'true');
     } catch {
-      setRunning(false);
+      try {
+        // Fallback for environments where inspect is unavailable.
+        const psResult = await ddClient.docker.cli.exec('ps', [
+          '--filter', 'name=^/temporal-dev$', '--format', '{{.State}}',
+        ]);
+        setRunning(psResult.stdout?.trim().toLowerCase() === 'running');
+      } catch {
+        setRunning(false);
+      }
     }
   }, []);
 
@@ -264,7 +279,7 @@ export function App() {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
-  const theme = useDockerTheme();
+  const { theme, prefersDark } = useDockerTheme();
   const logColor = { success: 'success.main', error: 'error.main', info: 'info.main' } as const;
 
   return (
@@ -273,9 +288,24 @@ export function App() {
       <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
 
         {/* Header */}
-        <AppBar position="static" elevation={0}>
-          <Toolbar variant="dense" sx={{ gap: 1 }}>
-            <Box component="img" src={logoUrl} alt="Temporal" sx={{ height: 28, mr: 'auto' }} />
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            px: 2,
+            py: 1,
+            borderBottom: 1,
+            borderColor: 'divider',
+            bgcolor: 'background.default',
+          }}
+        >
+            <Box
+              component="img"
+              src={prefersDark ? logoLightUrl : logoDarkUrl}
+              alt="Temporal"
+              sx={{ height: 26, width: 'auto', mr: 'auto' }}
+            />
             <Box sx={{
               width: 8, height: 8, borderRadius: '50%',
               bgcolor: running ? 'success.main' : 'action.disabled',
@@ -285,8 +315,7 @@ export function App() {
             <Typography variant="body2" color="inherit" sx={{ opacity: 0.85 }}>
               {running ? 'Running' : 'Stopped'}
             </Typography>
-          </Toolbar>
-        </AppBar>
+        </Box>
 
         {/* Body */}
         <Box sx={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
