@@ -57,6 +57,7 @@ interface Workflow {
   status: string;
   startTime?: string;
   executionTime?: string;
+  taskQueue?: string;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -91,6 +92,12 @@ export function App() {
   const [workflows, setWorkflows]   = useState<Workflow[]>([]);
   const [clearOpen, setClearOpen]   = useState(false);
   const [busy, setBusy]             = useState(false);
+  const [lastStatusCheck, setLastStatusCheck] = useState<Date | null>(null);
+  const [workerPollerCount, setWorkerPollerCount] = useState(0);
+  const [workerQueueCount, setWorkerQueueCount] = useState(0);
+  const [workerActiveQueueCount, setWorkerActiveQueueCount] = useState(0);
+  const [lastWorkerCheck, setLastWorkerCheck] = useState<Date | null>(null);
+  const [showAllLogs, setShowAllLogs] = useState(false);
   const [logsMinimized, setLogsMinimized] = useState(() => {
     try {
       return window.localStorage.getItem('temporal.logsMinimized') === 'true';
@@ -101,7 +108,7 @@ export function App() {
   const logRef                      = useRef<HTMLDivElement>(null);
 
   const addLog = useCallback((msg: string, type: LogEntry['type'] = 'info') => {
-    setLogs(prev => [...prev, { msg, type, time: new Date().toLocaleTimeString() }]);
+    setLogs(prev => [...prev, { msg, type, time: new Date().toLocaleTimeString() }].slice(-500));
   }, []);
 
   // Auto-scroll logs to bottom
@@ -125,6 +132,7 @@ export function App() {
       ]);
       const runningValue = inspectResult.stdout?.trim().toLowerCase();
       setRunning(runningValue === 'true');
+      setLastStatusCheck(new Date());
     } catch {
       try {
         // Fallback for environments where inspect is unavailable.
@@ -132,8 +140,10 @@ export function App() {
           '--filter', 'name=^/temporal-dev$', '--format', '{{.State}}',
         ]);
         setRunning(psResult.stdout?.trim().toLowerCase() === 'running');
+        setLastStatusCheck(new Date());
       } catch {
         setRunning(false);
+        setLastStatusCheck(new Date());
       }
     }
   }, []);
@@ -149,6 +159,62 @@ export function App() {
     }
   }, []);
 
+  const refreshWorkerStatus = useCallback(async (inputWorkflows: Workflow[]) => {
+    if (!running) {
+      setWorkerPollerCount(0);
+      setWorkerQueueCount(0);
+      setWorkerActiveQueueCount(0);
+      setLastWorkerCheck(new Date());
+      return;
+    }
+
+    const workflowQueues = Array.from(
+      new Set(
+        inputWorkflows
+          .map((w) => w.taskQueue?.trim())
+          .filter((q): q is string => Boolean(q)),
+      ),
+    );
+
+    if (workflowQueues.length === 0) {
+      setWorkerPollerCount(0);
+      setWorkerQueueCount(0);
+      setWorkerActiveQueueCount(0);
+      setLastWorkerCheck(new Date());
+      return;
+    }
+
+    let totalPollers = 0;
+    let activeQueues = 0;
+
+    for (const queue of workflowQueues) {
+      try {
+        const result = await ddClient.docker.cli.exec('exec', [
+          'temporal-dev',
+          'temporal',
+          'task-queue',
+          'describe',
+          '--namespace', 'default',
+          '--task-queue', queue,
+          '--task-queue-type', 'workflow',
+          '--output', 'json',
+        ]);
+
+        const parsed = JSON.parse(result.stdout ?? '{}') as { pollers?: Array<unknown> };
+        const count = Array.isArray(parsed.pollers) ? parsed.pollers.length : 0;
+        totalPollers += count;
+        if (count > 0) activeQueues += 1;
+      } catch {
+        // Ignore per-queue probe errors and continue.
+      }
+    }
+
+    setWorkerPollerCount(totalPollers);
+    setWorkerQueueCount(workflowQueues.length);
+    setWorkerActiveQueueCount(activeQueues);
+    setLastWorkerCheck(new Date());
+  }, [running]);
+
   // Poll status and workflows
   useEffect(() => {
     checkStatus();
@@ -162,6 +228,10 @@ export function App() {
     if (running) refreshWorkflows();
     else setWorkflows([]);
   }, [running, refreshWorkflows]);
+
+  useEffect(() => {
+    void refreshWorkerStatus(workflows);
+  }, [workflows, refreshWorkerStatus]);
 
   // ── Server helpers ───────────────────────────────────────────────────────
 
@@ -281,6 +351,12 @@ export function App() {
 
   const { theme, prefersDark } = useDockerTheme();
   const logColor = { success: 'success.main', error: 'error.main', info: 'info.main' } as const;
+  const logBadge = {
+    success: { label: 'OK', bg: 'success.main' },
+    error: { label: 'ERR', bg: 'error.main' },
+    info: { label: 'INFO', bg: 'info.main' },
+  } as const;
+  const visibleLogs = showAllLogs ? logs : logs.slice(-40);
 
   return (
     <ThemeProvider theme={theme}>
@@ -295,8 +371,6 @@ export function App() {
             gap: 1,
             px: 2,
             py: 1,
-            borderBottom: 1,
-            borderColor: 'divider',
             bgcolor: 'background.default',
           }}
         >
@@ -304,7 +378,12 @@ export function App() {
               component="img"
               src={prefersDark ? logoLightUrl : logoDarkUrl}
               alt="Temporal"
-              sx={{ height: 26, width: 'auto', mr: 'auto' }}
+              sx={{
+                width: { xs: 220, sm: 240 },
+                maxWidth: '100%',
+                height: 'auto',
+                mr: 'auto',
+              }}
             />
             <Box sx={{
               width: 8, height: 8, borderRadius: '50%',
@@ -318,15 +397,29 @@ export function App() {
         </Box>
 
         {/* Body */}
-        <Box sx={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+        <Box
+          sx={{
+            display: 'flex',
+            flex: 1,
+            overflow: 'hidden',
+            flexDirection: { xs: 'column', md: 'row' },
+            p: { xs: 1, md: 1.5 },
+            gap: { xs: 1, md: 1.5 },
+          }}
+        >
 
           {/* Left: Controls */}
           <Stack
             spacing={1.5}
             sx={{
-              width: 240, flexShrink: 0, p: 2,
+              width: { xs: '100%', md: 240 },
+              maxHeight: { xs: '40%', md: 'none' },
+              flexShrink: 0,
+              p: 2,
               bgcolor: 'background.paper',
-              borderRight: 1, borderColor: 'divider',
+              border: 1,
+              borderColor: 'divider',
+              borderRadius: 2,
               overflowY: 'auto',
             }}
           >
@@ -347,8 +440,70 @@ export function App() {
               </Stack>
             </Paper>
 
+            <Paper variant="outlined" sx={{ p: 1.5 }}>
+              <Typography variant="overline" display="block" sx={{ lineHeight: 1.5, mb: 1 }}>
+                Server Status
+              </Typography>
+              <Stack spacing={0.75}>
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <Typography variant="caption" color="text.secondary">State</Typography>
+                  <Chip
+                    label={running ? 'Running' : 'Stopped'}
+                    size="small"
+                    color={running ? 'success' : 'default'}
+                    sx={{ height: 20, fontSize: 10 }}
+                  />
+                </Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <Typography variant="caption" color="text.secondary">Last check</Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {lastStatusCheck ? lastStatusCheck.toLocaleTimeString() : '—'}
+                  </Typography>
+                </Box>
+              </Stack>
+            </Paper>
+
+            <Paper variant="outlined" sx={{ p: 1.5 }}>
+              <Typography variant="overline" display="block" sx={{ lineHeight: 1.5, mb: 1 }}>
+                Worker Status
+              </Typography>
+              <Stack spacing={0.75}>
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <Typography variant="caption" color="text.secondary">State</Typography>
+                  <Chip
+                    label={
+                      !running
+                        ? 'Server stopped'
+                        : workerQueueCount === 0
+                          ? 'No task queues'
+                          : workerPollerCount > 0
+                            ? 'Workers active'
+                            : 'No workers polling'
+                    }
+                    size="small"
+                    color={!running ? 'default' : workerPollerCount > 0 ? 'success' : 'warning'}
+                    sx={{ height: 20, fontSize: 10 }}
+                  />
+                </Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <Typography variant="caption" color="text.secondary">Workers</Typography>
+                  <Typography variant="caption">{workerPollerCount}</Typography>
+                </Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <Typography variant="caption" color="text.secondary">Active queues</Typography>
+                  <Typography variant="caption">{workerActiveQueueCount}/{workerQueueCount}</Typography>
+                </Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <Typography variant="caption" color="text.secondary">Last check</Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {lastWorkerCheck ? lastWorkerCheck.toLocaleTimeString() : '—'}
+                  </Typography>
+                </Box>
+              </Stack>
+            </Paper>
+
             <Button
-              variant="contained"
+              variant="outlined"
               fullWidth
               disabled={!running || busy}
               onClick={() => ddClient.host.openExternal('http://localhost:8233')}
@@ -359,25 +514,47 @@ export function App() {
             <Divider />
 
             {!running ? (
-              <Button variant="outlined" fullWidth disabled={busy} onClick={handleStart}>
+              <Button variant="contained" fullWidth disabled={busy} onClick={handleStart}>
                 Start Server
               </Button>
             ) : (
-              <Button variant="outlined" fullWidth disabled={busy} onClick={handleStop}>
+              <Button variant="contained" fullWidth color="warning" disabled={busy} onClick={handleStop}>
                 Stop Server
               </Button>
             )}
 
-            <Button variant="outlined" color="error" fullWidth disabled={busy} onClick={() => setClearOpen(true)}>
+            <Button variant="text" color="error" fullWidth disabled={busy} onClick={() => setClearOpen(true)}>
               Clear History
             </Button>
           </Stack>
 
           {/* Right: Workflows + Logs */}
-          <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <Box
+            sx={{
+              flex: 1,
+              minHeight: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+              bgcolor: 'background.paper',
+              border: 1,
+              borderColor: 'divider',
+              borderRadius: 2,
+            }}
+          >
 
             {/* Workflows */}
-            <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', borderBottom: 1, borderColor: 'divider' }}>
+            <Box
+              sx={{
+                flex: 1,
+                minHeight: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                overflow: 'hidden',
+                borderBottom: 1,
+                borderColor: 'divider',
+              }}
+            >
               <Box sx={{ px: 2, py: 0.75, borderBottom: 1, borderColor: 'divider', display: 'flex', alignItems: 'center', gap: 1 }}>
                 <Typography variant="overline">Recent Workflows</Typography>
                 {workflows.length > 0 && (
@@ -402,7 +579,12 @@ export function App() {
                         <ListItem
                           key={runId}
                           divider
-                          sx={{ px: 2, py: 1 }}
+                          sx={{
+                            px: 2,
+                            py: 1,
+                            transition: 'background-color 120ms ease',
+                            '&:hover': { bgcolor: 'action.hover' },
+                          }}
                         >
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 0, width: '100%' }}>
                             <Chip
@@ -467,31 +649,62 @@ export function App() {
                     </Typography>
                   )}
                 </Box>
-                <Tooltip title={logsMinimized ? 'Expand logs' : 'Minimize logs'}>
-                  <IconButton
-                    size="small"
-                    onClick={() => setLogsMinimized((v) => !v)}
-                    aria-label={logsMinimized ? 'Expand logs' : 'Minimize logs'}
-                  >
-                    <Typography component="span" sx={{ fontSize: 14, lineHeight: 1 }}>
-                      {logsMinimized ? '▸' : '▾'}
-                    </Typography>
-                  </IconButton>
-                </Tooltip>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  {!logsMinimized && logs.length > 40 && (
+                    <Button
+                      size="small"
+                      variant="text"
+                      onClick={() => setShowAllLogs((v) => !v)}
+                      sx={{ minWidth: 0, px: 0.75, py: 0.25, fontSize: 11, textTransform: 'none' }}
+                    >
+                      {showAllLogs ? 'Show less' : 'Show more'}
+                    </Button>
+                  )}
+                  <Tooltip title={logsMinimized ? 'Expand logs' : 'Minimize logs'}>
+                    <IconButton
+                      size="small"
+                      onClick={() => setLogsMinimized((v) => !v)}
+                      aria-label={logsMinimized ? 'Expand logs' : 'Minimize logs'}
+                    >
+                      <Typography component="span" sx={{ fontSize: 14, lineHeight: 1 }}>
+                        {logsMinimized ? '▸' : '▾'}
+                      </Typography>
+                    </IconButton>
+                  </Tooltip>
+                </Box>
               </Box>
               {!logsMinimized && (
                 <Box ref={logRef} sx={{ flex: 1, overflowY: 'auto', px: 2, py: 1 }}>
-                  {logs.map((entry, i) => (
-                    <Typography
-                      key={i}
-                      variant="caption"
-                      display="block"
-                      fontFamily="monospace"
-                      color={logColor[entry.type]}
-                      sx={{ lineHeight: 1.7 }}
-                    >
-                      [{entry.time}] {entry.msg}
-                    </Typography>
+                  {visibleLogs.map((entry, i) => (
+                    <Box key={i} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, py: 0.25 }}>
+                      <Box
+                        sx={{
+                          mt: 0.2,
+                          px: 0.5,
+                          py: 0.1,
+                          borderRadius: 0.5,
+                          bgcolor: logBadge[entry.type].bg,
+                          color: 'common.white',
+                          fontSize: 9,
+                          lineHeight: 1.4,
+                          fontWeight: 700,
+                          minWidth: 28,
+                          textAlign: 'center',
+                          flexShrink: 0,
+                        }}
+                      >
+                        {logBadge[entry.type].label}
+                      </Box>
+                      <Typography
+                        variant="caption"
+                        display="block"
+                        fontFamily="monospace"
+                        color={logColor[entry.type]}
+                        sx={{ lineHeight: 1.7 }}
+                      >
+                        [{entry.time}] {entry.msg}
+                      </Typography>
+                    </Box>
                   ))}
                 </Box>
               )}
