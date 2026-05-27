@@ -9,7 +9,7 @@ RUN npm run build
 # Final extension image
 FROM scratch
 
-ARG VERSION=1.0.0
+ARG VERSION=1.0.6
 
 LABEL org.opencontainers.image.title="Temporal" \
     org.opencontainers.image.description="Run Temporal Server locally with persistent SQLite storage" \

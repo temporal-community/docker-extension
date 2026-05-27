@@ -6,7 +6,7 @@ import { App } from './App'
 window.addEventListener('error', (e) => {
   const root = document.getElementById('root');
   if (root && !root.innerHTML) {
-    root.style.cssText = 'color:white;padding:20px;font-family:monospace;white-space:pre-wrap;';
+    root.style.cssText = 'background:Canvas;color:CanvasText;padding:20px;font-family:monospace;white-space:pre-wrap;';
     root.textContent = 'Error: ' + e.message + '\n' + (e.error?.stack ?? '');
   }
 });
@@ -14,7 +14,7 @@ window.addEventListener('error', (e) => {
 window.addEventListener('unhandledrejection', (e) => {
   const root = document.getElementById('root');
   if (root && !root.innerHTML) {
-    root.style.cssText = 'color:white;padding:20px;font-family:monospace;white-space:pre-wrap;';
+    root.style.cssText = 'background:Canvas;color:CanvasText;padding:20px;font-family:monospace;white-space:pre-wrap;';
     root.textContent = 'Unhandled rejection: ' + String(e.reason);
   }
 });

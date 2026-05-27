@@ -4,6 +4,8 @@
 
 Docker Desktop extension for running Temporal Server locally with persistent SQLite storage.
 
+Source code: https://github.com/temporal-community/docker-extension
+
 ## What This Provides
 
 - One-click Temporal Server start/stop
@@ -69,8 +71,8 @@ This validates metadata and performs an install/uninstall cycle for the locally 
 1. Create and push a semantic version tag:
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag v1.0.6
+git push origin v1.0.6
 ```
 
 2. The publish workflow builds and pushes a multi-arch image (`linux/amd64`, `linux/arm64`) with semver tags.
