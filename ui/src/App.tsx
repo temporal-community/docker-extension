@@ -1,143 +1,76 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
-import { createDockerDesktopClient } from '@docker/extension-api-client';
-import { createTheme, ThemeProvider } from '@mui/material/styles';
+import { useCallback, useEffect, useState } from 'react';
 import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import Chip from '@mui/material/Chip';
 import CssBaseline from '@mui/material/CssBaseline';
-import Dialog from '@mui/material/Dialog';
-import DialogActions from '@mui/material/DialogActions';
-import DialogContent from '@mui/material/DialogContent';
-import DialogContentText from '@mui/material/DialogContentText';
-import DialogTitle from '@mui/material/DialogTitle';
-import Divider from '@mui/material/Divider';
-import IconButton from '@mui/material/IconButton';
-import List from '@mui/material/List';
-import ListItem from '@mui/material/ListItem';
-import Paper from '@mui/material/Paper';
-import Stack from '@mui/material/Stack';
-import Typography from '@mui/material/Typography';
-import Tooltip from '@mui/material/Tooltip';
-
+import GlobalStyles from '@mui/material/GlobalStyles';
+import { ThemeProvider } from '@mui/material/styles';
+import { ClearHistoryDialog } from './components/ClearHistoryDialog';
+import { ControlPanel } from './components/ControlPanel';
+import { HeaderHero } from './components/HeaderHero';
+import { LogsPanel } from './components/LogsPanel';
+import { RecentActivityPanel } from './components/RecentActivityPanel';
+import {
+  CONTAINER_NAME,
+  DATA_VOLUME_NAME,
+  NETWORK_NAME,
+  TEMPORAL_WEB_URL,
+} from './constants';
+import { ddClient } from './dockerClient';
+import { useDockerTheme } from './hooks/useDockerTheme';
+import { useLogs } from './hooks/useLogs';
+import { useReadiness } from './hooks/useReadiness';
+import { useWorkerStatus } from './hooks/useWorkerStatus';
+import { useWorkflows } from './hooks/useWorkflows';
 import logoDarkUrl from './assets/temporal-logo-dark.png';
 import logoLightUrl from './assets/temporal-logo-light.png';
-
-const ddClient = createDockerDesktopClient();
-
-// ── Theme ─────────────────────────────────────────────────────────────────────
-// Use Docker Desktop's injected theme if available, otherwise fall back to dark.
-declare global { interface Window { __ddMuiV5Themes?: { dark: object; light: object } } }
-
-function useDockerTheme() {
-  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-  const injected = window.__ddMuiV5Themes;
-  if (injected) {
-    return {
-      theme: createTheme(injected[prefersDark ? 'dark' : 'light']),
-      prefersDark,
-    };
-  }
-  return {
-    theme: createTheme({ palette: { mode: prefersDark ? 'dark' : 'light' } }),
-    prefersDark,
-  };
-}
-
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-interface LogEntry {
-  msg: string;
-  type: 'success' | 'error' | 'info';
-  time: string;
-}
-
-interface Workflow {
-  execution: { workflowId: string; runId: string };
-  type?: { name: string };
-  status: string;
-  startTime?: string;
-  executionTime?: string;
-  taskQueue?: string;
-}
-
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-const STATUS_MAP: Record<string, { label: string; color: 'success' | 'info' | 'error' | 'default' | 'warning' }> = {
-  WORKFLOW_EXECUTION_STATUS_RUNNING:          { label: 'Running',    color: 'success' },
-  WORKFLOW_EXECUTION_STATUS_COMPLETED:        { label: 'Completed',  color: 'info'    },
-  WORKFLOW_EXECUTION_STATUS_FAILED:           { label: 'Failed',     color: 'error'   },
-  WORKFLOW_EXECUTION_STATUS_CANCELED:         { label: 'Canceled',   color: 'default' },
-  WORKFLOW_EXECUTION_STATUS_TERMINATED:       { label: 'Terminated', color: 'default' },
-  WORKFLOW_EXECUTION_STATUS_CONTINUED_AS_NEW: { label: 'Continued',  color: 'info'    },
-  WORKFLOW_EXECUTION_STATUS_TIMED_OUT:        { label: 'Timed Out',  color: 'warning' },
-};
-
-function relativeTime(iso?: string): string {
-  if (!iso) return '';
-  const diff = Date.now() - new Date(iso).getTime();
-  const s = Math.floor(diff / 1000);
-  if (s < 60)  return `${s}s ago`;
-  const m = Math.floor(s / 60);
-  if (m < 60)  return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24)  return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
-}
-
-// ── App ───────────────────────────────────────────────────────────────────────
+import { getErrorMessage, getTemporalWebUrl, startupDiagnostics } from './utils';
 
 export function App() {
-  const [running, setRunning]       = useState(false);
-  const [logs, setLogs]             = useState<LogEntry[]>([]);
-  const [workflows, setWorkflows]   = useState<Workflow[]>([]);
-  const [clearOpen, setClearOpen]   = useState(false);
-  const [busy, setBusy]             = useState(false);
+  const [running, setRunning] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [clearOpen, setClearOpen] = useState(false);
+  const [clearConfirm, setClearConfirm] = useState('');
   const [lastStatusCheck, setLastStatusCheck] = useState<Date | null>(null);
-  const [workerPollerCount, setWorkerPollerCount] = useState(0);
-  const [workerQueueCount, setWorkerQueueCount] = useState(0);
-  const [workerActiveQueueCount, setWorkerActiveQueueCount] = useState(0);
-  const [lastWorkerCheck, setLastWorkerCheck] = useState<Date | null>(null);
-  const [showAllLogs, setShowAllLogs] = useState(false);
-  const [logsMinimized, setLogsMinimized] = useState(() => {
-    try {
-      return window.localStorage.getItem('temporal.logsMinimized') === 'true';
-    } catch {
-      return false;
-    }
-  });
-  const logRef                      = useRef<HTMLDivElement>(null);
+  const [diagnostics, setDiagnostics] = useState<ReturnType<typeof startupDiagnostics>>([]);
 
-  const addLog = useCallback((msg: string, type: LogEntry['type'] = 'info') => {
-    setLogs(prev => [...prev, { msg, type, time: new Date().toLocaleTimeString() }].slice(-500));
-  }, []);
-
-  // Auto-scroll logs to bottom
-  useEffect(() => {
-    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [logs]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem('temporal.logsMinimized', String(logsMinimized));
-    } catch {
-      // Ignore storage errors.
-    }
-  }, [logsMinimized]);
+  const { theme, prefersDark } = useDockerTheme();
+  const {
+    addLog,
+    logRef,
+    logs,
+    logsMinimized,
+    setLogsMinimized,
+    setShowAllLogs,
+    showAllLogs,
+    visibleLogs,
+  } = useLogs();
+  const {
+    fetchWorkflows,
+    lastWorkflowCheck,
+    refreshWorkflows,
+    setLastWorkflowCheck,
+    setWorkflows,
+    workflows,
+  } = useWorkflows(running);
+  const {
+    lastWorkerCheck,
+    workerActiveQueueCount,
+    workerPollerCount,
+    workerQueueCount,
+  } = useWorkerStatus(running, workflows);
+  const { checks: readinessChecks, refreshReadiness } = useReadiness(running);
 
   const checkStatus = useCallback(async () => {
     try {
-      // Prefer inspect because `.State.Running` is stable across platforms/locales.
       const inspectResult = await ddClient.docker.cli.exec('container', [
-        'inspect', '--format', '{{.State.Running}}', 'temporal-dev',
+        'inspect', '--format', '{{.State.Running}}', CONTAINER_NAME,
       ]);
-      const runningValue = inspectResult.stdout?.trim().toLowerCase();
-      setRunning(runningValue === 'true');
+      const isRunning = inspectResult.stdout?.trim().toLowerCase() === 'true';
+      setRunning(isRunning);
       setLastStatusCheck(new Date());
     } catch {
       try {
-        // Fallback for environments where inspect is unavailable.
         const psResult = await ddClient.docker.cli.exec('ps', [
-          '--filter', 'name=^/temporal-dev$', '--format', '{{.State}}',
+          '--filter', `name=^/${CONTAINER_NAME}$`, '--format', '{{.State}}',
         ]);
         setRunning(psResult.stdout?.trim().toLowerCase() === 'running');
         setLastStatusCheck(new Date());
@@ -148,99 +81,20 @@ export function App() {
     }
   }, []);
 
-  const refreshWorkflows = useCallback(async () => {
-    try {
-      const res = await fetch('http://localhost:8233/api/v1/namespaces/default/workflows?pageSize=20');
-      if (!res.ok) { setWorkflows([]); return; }
-      const data = await res.json();
-      setWorkflows(data.executions ?? []);
-    } catch {
-      setWorkflows([]);
-    }
-  }, []);
-
-  const refreshWorkerStatus = useCallback(async (inputWorkflows: Workflow[]) => {
-    if (!running) {
-      setWorkerPollerCount(0);
-      setWorkerQueueCount(0);
-      setWorkerActiveQueueCount(0);
-      setLastWorkerCheck(new Date());
-      return;
-    }
-
-    const workflowQueues = Array.from(
-      new Set(
-        inputWorkflows
-          .map((w) => w.taskQueue?.trim())
-          .filter((q): q is string => Boolean(q)),
-      ),
-    );
-
-    if (workflowQueues.length === 0) {
-      setWorkerPollerCount(0);
-      setWorkerQueueCount(0);
-      setWorkerActiveQueueCount(0);
-      setLastWorkerCheck(new Date());
-      return;
-    }
-
-    let totalPollers = 0;
-    let activeQueues = 0;
-
-    for (const queue of workflowQueues) {
-      try {
-        const result = await ddClient.docker.cli.exec('exec', [
-          'temporal-dev',
-          'temporal',
-          'task-queue',
-          'describe',
-          '--namespace', 'default',
-          '--task-queue', queue,
-          '--task-queue-type', 'workflow',
-          '--output', 'json',
-        ]);
-
-        const parsed = JSON.parse(result.stdout ?? '{}') as { pollers?: Array<unknown> };
-        const count = Array.isArray(parsed.pollers) ? parsed.pollers.length : 0;
-        totalPollers += count;
-        if (count > 0) activeQueues += 1;
-      } catch {
-        // Ignore per-queue probe errors and continue.
-      }
-    }
-
-    setWorkerPollerCount(totalPollers);
-    setWorkerQueueCount(workflowQueues.length);
-    setWorkerActiveQueueCount(activeQueues);
-    setLastWorkerCheck(new Date());
-  }, [running]);
-
-  // Poll status and workflows
   useEffect(() => {
-    checkStatus();
+    void checkStatus();
     const si = setInterval(checkStatus, 5000);
-    const wi = setInterval(refreshWorkflows, 10000);
-    return () => { clearInterval(si); clearInterval(wi); };
-  }, [checkStatus, refreshWorkflows]);
-
-  // Refresh workflows when running state changes
-  useEffect(() => {
-    if (running) refreshWorkflows();
-    else setWorkflows([]);
-  }, [running, refreshWorkflows]);
-
-  useEffect(() => {
-    void refreshWorkerStatus(workflows);
-  }, [workflows, refreshWorkerStatus]);
-
-  // ── Server helpers ───────────────────────────────────────────────────────
+    return () => { clearInterval(si); };
+  }, [checkStatus]);
 
   async function waitForReady(maxAttempts = 30): Promise<boolean> {
     for (let i = 0; i < maxAttempts; i++) {
       try {
-        const res = await fetch('http://localhost:8233');
+        const res = await fetch(getTemporalWebUrl());
         if (res.ok || res.status === 405) return true;
-      } catch { /* not ready yet */ }
+      } catch {
+        // Not ready yet.
+      }
       await new Promise(r => setTimeout(r, 1000));
     }
     return false;
@@ -249,28 +103,34 @@ export function App() {
   async function startServer() {
     addLog('Creating data volume...', 'info');
     try {
-      await ddClient.docker.cli.exec('volume', ['create', 'temporal-dev-data']);
+      await ddClient.docker.cli.exec('volume', ['create', DATA_VOLUME_NAME]);
       addLog('Volume ready', 'success');
-    } catch { addLog('Using existing volume', 'info'); }
+    } catch {
+      addLog('Using existing volume', 'info');
+    }
 
     try {
       await ddClient.docker.cli.exec('run', [
-        '--rm', '-v', 'temporal-dev-data:/data', 'alpine', 'chmod', '777', '/data',
+        '--rm', '-v', `${DATA_VOLUME_NAME}:/data`, 'alpine', 'chmod', '777', '/data',
       ]);
-    } catch { /* permissions may already be set */ }
+    } catch {
+      // Permissions may already be set.
+    }
 
     addLog('Creating network...', 'info');
     try {
-      await ddClient.docker.cli.exec('network', ['create', 'temporal-network']);
+      await ddClient.docker.cli.exec('network', ['create', NETWORK_NAME]);
       addLog('Network ready', 'success');
-    } catch { addLog('Using existing network', 'info'); }
+    } catch {
+      addLog('Using existing network', 'info');
+    }
 
     addLog('Starting Temporal...', 'info');
     await ddClient.docker.cli.exec('run', [
-      '-d', '--name', 'temporal-dev',
-      '--network', 'temporal-network',
+      '-d', '--name', CONTAINER_NAME,
+      '--network', NETWORK_NAME,
       '-p', '7233:7233', '-p', '8233:8233',
-      '-v', 'temporal-dev-data:/data',
+      '-v', `${DATA_VOLUME_NAME}:/data`,
       'temporalio/temporal:latest',
       'server', 'start-dev',
       '--ip', '0.0.0.0', '--ui-ip', '0.0.0.0',
@@ -279,24 +139,37 @@ export function App() {
     addLog('Temporal container started', 'success');
   }
 
-  // ── Handlers ─────────────────────────────────────────────────────────────
+  async function syncReadyState() {
+    await checkStatus();
+    const nextWorkflows = await fetchWorkflows();
+    setWorkflows(nextWorkflows);
+    setLastWorkflowCheck(new Date());
+    await refreshReadiness();
+  }
 
   async function handleStart() {
     setBusy(true);
+    setDiagnostics([]);
     try {
-      try { await ddClient.docker.cli.exec('rm', ['-f', 'temporal-dev']); } catch { /* ok */ }
+      try {
+        await ddClient.docker.cli.exec('rm', ['-f', CONTAINER_NAME]);
+      } catch {
+        // No previous container to remove.
+      }
       await startServer();
       addLog('Waiting for Temporal to be ready...', 'info');
       if (await waitForReady()) {
-        addLog('Ready — click "Open Temporal UI" to launch', 'success');
-        await checkStatus();
-        await refreshWorkflows();
+        addLog('Ready — open Temporal UI for workflow inspection', 'success');
+        await syncReadyState();
       } else {
-        addLog('Temporal did not respond within 30s', 'error');
+        const message = 'Temporal did not respond within 30s';
+        setDiagnostics(startupDiagnostics(message));
+        addLog(message, 'error');
       }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : (err as { stderr?: string })?.stderr ?? 'Unknown error';
-      addLog('Error: ' + msg, 'error');
+      const message = getErrorMessage(err);
+      setDiagnostics(startupDiagnostics(message));
+      addLog('Error: ' + message, 'error');
     } finally {
       setBusy(false);
     }
@@ -305,13 +178,18 @@ export function App() {
   async function handleStop() {
     setBusy(true);
     try {
-      await ddClient.docker.cli.exec('rm', ['-f', 'temporal-dev']);
+      await ddClient.docker.cli.exec('rm', ['-f', CONTAINER_NAME]);
       addLog('Temporal stopped', 'success');
-      try { await ddClient.docker.cli.exec('network', ['rm', 'temporal-network']); } catch { /* ok */ }
+      try {
+        await ddClient.docker.cli.exec('network', ['rm', NETWORK_NAME]);
+      } catch {
+        // Network may still be in use or already gone.
+      }
+      setWorkflows([]);
+      setLastWorkflowCheck(null);
       await checkStatus();
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Unknown error';
-      addLog('Error: ' + msg, 'error');
+      addLog('Error: ' + getErrorMessage(err), 'error');
     } finally {
       setBusy(false);
     }
@@ -319,425 +197,132 @@ export function App() {
 
   async function handleClear() {
     setClearOpen(false);
+    setClearConfirm('');
     setBusy(true);
-    addLog('Clearing history...', 'info');
+    setDiagnostics([]);
+    addLog('Resetting local Temporal history...', 'info');
     try {
-      try { await ddClient.docker.cli.exec('rm', ['-f', 'temporal-dev']); addLog('Containers stopped', 'success'); }
-      catch { addLog('No containers to remove', 'info'); }
+      try {
+        await ddClient.docker.cli.exec('rm', ['-f', CONTAINER_NAME]);
+        addLog('Container stopped', 'success');
+      } catch {
+        addLog('No container to remove', 'info');
+      }
 
-      try { await ddClient.docker.cli.exec('volume', ['rm', 'temporal-dev-data']); addLog('Data volume removed', 'success'); }
-      catch { addLog('Volume already removed', 'info'); }
+      try {
+        await ddClient.docker.cli.exec('volume', ['rm', DATA_VOLUME_NAME]);
+        addLog('Data volume removed', 'success');
+      } catch {
+        addLog('Data volume already removed', 'info');
+      }
 
-      try { await ddClient.docker.cli.exec('network', ['rm', 'temporal-network']); } catch { /* ok */ }
+      try {
+        await ddClient.docker.cli.exec('network', ['rm', NETWORK_NAME]);
+      } catch {
+        // Network may already be gone.
+      }
 
-      addLog('Restarting with fresh database...', 'info');
+      addLog('Restarting with a fresh database...', 'info');
       await startServer();
       if (await waitForReady()) {
         addLog('Ready with fresh database', 'success');
-        await checkStatus();
-        await refreshWorkflows();
+        await syncReadyState();
       } else {
-        addLog('Temporal did not respond within 30s', 'error');
+        const message = 'Temporal did not respond within 30s';
+        setDiagnostics(startupDiagnostics(message));
+        addLog(message, 'error');
       }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : (err as { stderr?: string })?.stderr ?? 'Unknown error';
-      addLog('Error: ' + msg, 'error');
+      const message = getErrorMessage(err);
+      setDiagnostics(startupDiagnostics(message));
+      addLog('Error: ' + message, 'error');
     } finally {
       setBusy(false);
     }
   }
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  async function handleCopy(value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      addLog(`Copied ${value}`, 'success');
+    } catch {
+      addLog(`Copy failed. Value: ${value}`, 'error');
+    }
+  }
 
-  const { theme, prefersDark } = useDockerTheme();
-  const logColor = { success: 'success.main', error: 'error.main', info: 'info.main' } as const;
-  const logBadge = {
-    success: { label: 'OK', bg: 'success.main' },
-    error: { label: 'ERR', bg: 'error.main' },
-    info: { label: 'INFO', bg: 'info.main' },
-  } as const;
-  const visibleLogs = showAllLogs ? logs : logs.slice(-40);
+  function openClearDialog() {
+    setClearConfirm('');
+    setClearOpen(true);
+  }
+
+  const logoUrl = prefersDark ? logoLightUrl : logoDarkUrl;
 
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
-
-        {/* Header */}
-        <Box
-          sx={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 1,
-            px: 2,
-            py: 1,
-            bgcolor: 'background.default',
-          }}
-        >
-            <Box
-              component="img"
-              src={prefersDark ? logoLightUrl : logoDarkUrl}
-              alt="Temporal"
-              sx={{
-                width: { xs: 220, sm: 240 },
-                maxWidth: '100%',
-                height: 'auto',
-                mr: 'auto',
-              }}
-            />
-            <Box sx={{
-              width: 8, height: 8, borderRadius: '50%',
-              bgcolor: running ? 'success.main' : 'action.disabled',
-              boxShadow: running ? '0 0 6px' : 'none',
-              color: running ? 'success.main' : 'transparent',
-            }} />
-            <Typography variant="body2" color="inherit" sx={{ opacity: 0.85 }}>
-              {running ? 'Running' : 'Stopped'}
-            </Typography>
-        </Box>
-
-        {/* Body */}
-        <Box
-          sx={{
-            display: 'flex',
-            flex: 1,
-            overflow: 'hidden',
-            flexDirection: { xs: 'column', md: 'row' },
-            p: { xs: 1, md: 1.5 },
-            gap: { xs: 1, md: 1.5 },
-          }}
-        >
-
-          {/* Left: Controls */}
-          <Stack
-            spacing={1.5}
-            sx={{
-              width: { xs: '100%', md: 240 },
-              maxHeight: { xs: '40%', md: 'none' },
-              flexShrink: 0,
-              p: 2,
-              bgcolor: 'background.paper',
-              border: 1,
-              borderColor: 'divider',
-              borderRadius: 2,
-              overflowY: 'auto',
-            }}
-          >
-            <Paper variant="outlined" sx={{ p: 1.5 }}>
-              <Typography variant="overline" display="block" sx={{ lineHeight: 1.5, mb: 1 }}>
-                Endpoints
-              </Typography>
-              <Stack spacing={0.75}>
-                {([['gRPC', 'localhost:7233'], ['Web UI', 'localhost:8233']] as const).map(([label, addr]) => (
-                  <Box key={label} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Typography variant="caption" color="text.secondary">{label}</Typography>
-                    <Typography variant="caption" fontFamily="monospace"
-                      sx={{ bgcolor: 'action.hover', px: 0.75, py: 0.25, borderRadius: 0.5 }}>
-                      {addr}
-                    </Typography>
-                  </Box>
-                ))}
-              </Stack>
-            </Paper>
-
-            <Paper variant="outlined" sx={{ p: 1.5 }}>
-              <Typography variant="overline" display="block" sx={{ lineHeight: 1.5, mb: 1 }}>
-                Server Status
-              </Typography>
-              <Stack spacing={0.75}>
-                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <Typography variant="caption" color="text.secondary">State</Typography>
-                  <Chip
-                    label={running ? 'Running' : 'Stopped'}
-                    size="small"
-                    color={running ? 'success' : 'default'}
-                    sx={{ height: 20, fontSize: 10 }}
-                  />
-                </Box>
-                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <Typography variant="caption" color="text.secondary">Last check</Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    {lastStatusCheck ? lastStatusCheck.toLocaleTimeString() : '—'}
-                  </Typography>
-                </Box>
-              </Stack>
-            </Paper>
-
-            <Paper variant="outlined" sx={{ p: 1.5 }}>
-              <Typography variant="overline" display="block" sx={{ lineHeight: 1.5, mb: 1 }}>
-                Worker Status
-              </Typography>
-              <Stack spacing={0.75}>
-                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <Typography variant="caption" color="text.secondary">State</Typography>
-                  <Chip
-                    label={
-                      !running
-                        ? 'Server stopped'
-                        : workerQueueCount === 0
-                          ? 'No task queues'
-                          : workerPollerCount > 0
-                            ? 'Workers active'
-                            : 'No workers polling'
-                    }
-                    size="small"
-                    color={!running ? 'default' : workerPollerCount > 0 ? 'success' : 'warning'}
-                    sx={{ height: 20, fontSize: 10 }}
-                  />
-                </Box>
-                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <Typography variant="caption" color="text.secondary">Workers</Typography>
-                  <Typography variant="caption">{workerPollerCount}</Typography>
-                </Box>
-                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <Typography variant="caption" color="text.secondary">Active queues</Typography>
-                  <Typography variant="caption">{workerActiveQueueCount}/{workerQueueCount}</Typography>
-                </Box>
-                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <Typography variant="caption" color="text.secondary">Last check</Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    {lastWorkerCheck ? lastWorkerCheck.toLocaleTimeString() : '—'}
-                  </Typography>
-                </Box>
-              </Stack>
-            </Paper>
-
-            <Button
-              variant="outlined"
-              fullWidth
-              disabled={!running || busy}
-              onClick={() => ddClient.host.openExternal('http://localhost:8233')}
-            >
-              Open Temporal UI ↗
-            </Button>
-
-            <Divider />
-
-            {!running ? (
-              <Button variant="contained" fullWidth disabled={busy} onClick={handleStart}>
-                Start Server
-              </Button>
-            ) : (
-              <Button variant="contained" fullWidth color="warning" disabled={busy} onClick={handleStop}>
-                Stop Server
-              </Button>
-            )}
-
-            <Button variant="text" color="error" fullWidth disabled={busy} onClick={() => setClearOpen(true)}>
-              Clear History
-            </Button>
-          </Stack>
-
-          {/* Right: Workflows + Logs */}
+      <GlobalStyles styles={{
+        html: { height: '100%', overflow: 'hidden' },
+        body: { height: '100%', overflow: 'hidden' },
+        '#root': { height: '100%', overflow: 'hidden' },
+      }}
+      />
+      <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden', bgcolor: 'background.default' }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden', p: { xs: 1, md: 2 }, boxSizing: 'border-box' }}>
+          <HeaderHero logoUrl={logoUrl} running={running} busy={busy} />
           <Box
             sx={{
+              display: 'flex',
               flex: 1,
               minHeight: 0,
-              display: 'flex',
-              flexDirection: 'column',
               overflow: 'hidden',
-              bgcolor: 'background.paper',
-              border: 1,
-              borderColor: 'divider',
-              borderRadius: 2,
+              flexDirection: { xs: 'column', md: 'row' },
+              gap: { xs: 1, md: 1.5 },
             }}
           >
-
-            {/* Workflows */}
-            <Box
-              sx={{
-                flex: 1,
-                minHeight: 0,
-                display: 'flex',
-                flexDirection: 'column',
-                overflow: 'hidden',
-                borderBottom: 1,
-                borderColor: 'divider',
-              }}
-            >
-              <Box sx={{ px: 2, py: 0.75, borderBottom: 1, borderColor: 'divider', display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Typography variant="overline">Recent Workflows</Typography>
-                {workflows.length > 0 && (
-                  <Typography variant="caption" color="text.secondary">
-                    {workflows.length}{workflows.length === 20 ? '+' : ''}
-                  </Typography>
-                )}
-              </Box>
-              <Box sx={{ flex: 1, overflowY: 'auto' }}>
-                {workflows.length === 0 ? (
-                  <Typography variant="body2" color="text.disabled" sx={{ p: 3, textAlign: 'center' }}>
-                    {running ? 'No workflows yet' : 'Start the server to see workflows'}
-                  </Typography>
-                ) : (
-                  <List dense disablePadding>
-                    {workflows.map((wf) => {
-                      const { workflowId, runId } = wf.execution;
-                      const { label, color } = STATUS_MAP[wf.status] ?? { label: wf.status, color: 'default' as const };
-                      const startTime = wf.startTime ?? wf.executionTime;
-                      const url = `http://localhost:8233/namespaces/default/workflows/${encodeURIComponent(workflowId)}/${encodeURIComponent(runId)}/history`;
-                      return (
-                        <ListItem
-                          key={runId}
-                          divider
-                          sx={{
-                            px: 2,
-                            py: 1,
-                            transition: 'background-color 120ms ease',
-                            '&:hover': { bgcolor: 'action.hover' },
-                          }}
-                        >
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 0, width: '100%' }}>
-                            <Chip
-                              label={label}
-                              color={color}
-                              size="small"
-                              sx={{ flexShrink: 0, fontSize: 10, height: 20 }}
-                            />
-                            <Box sx={{ minWidth: 0, flex: 1 }}>
-                              <Typography variant="caption" fontFamily="monospace" display="block" noWrap>
-                                {workflowId}
-                              </Typography>
-                              <Typography variant="caption" color="text.secondary" display="block" noWrap>
-                                {wf.type?.name}
-                              </Typography>
-                            </Box>
-                            <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
-                              {relativeTime(startTime)}
-                            </Typography>
-                            <Button
-                              size="small"
-                              sx={{ ml: 1 }}
-                              onClick={() => ddClient.host.openExternal(url)}
-                            >
-                              View →
-                            </Button>
-                          </Box>
-                        </ListItem>
-                      );
-                    })}
-                  </List>
-                )}
-              </Box>
+            <ControlPanel
+              busy={busy}
+              diagnostics={diagnostics}
+              lastStatusCheck={lastStatusCheck}
+              lastWorkerCheck={lastWorkerCheck}
+              logCount={logs.length}
+              onClearClick={openClearDialog}
+              onCopy={handleCopy}
+              onStart={handleStart}
+              onStop={handleStop}
+              onTroubleshootClick={() => setLogsMinimized(false)}
+              readinessChecks={readinessChecks}
+              running={running}
+              workerActiveQueueCount={workerActiveQueueCount}
+              workerPollerCount={workerPollerCount}
+              workerQueueCount={workerQueueCount}
+            />
+            <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              <RecentActivityPanel
+                busy={busy}
+                lastWorkflowCheck={lastWorkflowCheck}
+                onRefresh={refreshWorkflows}
+                running={running}
+                workflows={workflows}
+              />
             </Box>
-
-            {/* Logs */}
-            <Box
-              sx={{
-                height: logsMinimized ? 42 : 180,
-                display: 'flex',
-                flexDirection: 'column',
-                flexShrink: 0,
-              }}
-            >
-              <Box
-                sx={{
-                  px: 2,
-                  py: 0.5,
-                  borderBottom: logsMinimized ? 0 : 1,
-                  borderColor: 'divider',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  minHeight: 42,
-                }}
-              >
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <Typography variant="overline">Logs</Typography>
-                  {logs.length > 0 && (
-                    <Typography variant="caption" color="text.secondary">
-                      {logs.length}
-                    </Typography>
-                  )}
-                </Box>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                  {!logsMinimized && logs.length > 40 && (
-                    <Button
-                      size="small"
-                      variant="text"
-                      onClick={() => setShowAllLogs((v) => !v)}
-                      sx={{ minWidth: 0, px: 0.75, py: 0.25, fontSize: 11, textTransform: 'none' }}
-                    >
-                      {showAllLogs ? 'Show less' : 'Show more'}
-                    </Button>
-                  )}
-                  <Tooltip title={logsMinimized ? 'Expand logs' : 'Minimize logs'}>
-                    <IconButton
-                      size="small"
-                      onClick={() => setLogsMinimized((v) => !v)}
-                      aria-label={logsMinimized ? 'Expand logs' : 'Minimize logs'}
-                    >
-                      <Typography component="span" sx={{ fontSize: 14, lineHeight: 1 }}>
-                        {logsMinimized ? '▸' : '▾'}
-                      </Typography>
-                    </IconButton>
-                  </Tooltip>
-                </Box>
-              </Box>
-              {!logsMinimized && (
-                <Box ref={logRef} sx={{ flex: 1, overflowY: 'auto', px: 2, py: 1 }}>
-                  {visibleLogs.map((entry, i) => (
-                    <Box key={i} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, py: 0.25 }}>
-                      <Box
-                        sx={{
-                          mt: 0.2,
-                          px: 0.5,
-                          py: 0.1,
-                          borderRadius: 0.5,
-                          bgcolor: logBadge[entry.type].bg,
-                          color: 'common.white',
-                          fontSize: 9,
-                          lineHeight: 1.4,
-                          fontWeight: 700,
-                          minWidth: 28,
-                          textAlign: 'center',
-                          flexShrink: 0,
-                        }}
-                      >
-                        {logBadge[entry.type].label}
-                      </Box>
-                      <Typography
-                        variant="caption"
-                        display="block"
-                        fontFamily="monospace"
-                        color={logColor[entry.type]}
-                        sx={{ lineHeight: 1.7 }}
-                      >
-                        [{entry.time}] {entry.msg}
-                      </Typography>
-                    </Box>
-                  ))}
-                </Box>
-              )}
-            </Box>
-
           </Box>
         </Box>
-
-        {/* Clear History Dialog */}
-        <Dialog open={clearOpen} onClose={() => setClearOpen(false)} maxWidth="xs" fullWidth>
-          <DialogTitle>Clear Temporal History</DialogTitle>
-          <DialogContent>
-            <DialogContentText>This will permanently delete:</DialogContentText>
-            <Box component="ul" sx={{ mt: 1, pl: 2 }}>
-              {[
-                'All workflow execution history',
-                'All workflow state data',
-                'All namespace configurations',
-                'The entire SQLite database',
-              ].map(item => (
-                <Typography key={item} component="li" variant="body2" color="text.secondary">{item}</Typography>
-              ))}
-            </Box>
-            <DialogContentText sx={{ mt: 1 }}>
-              <strong>The server will restart with a fresh database.</strong>
-            </DialogContentText>
-          </DialogContent>
-          <DialogActions>
-            <Button onClick={() => setClearOpen(false)}>Cancel</Button>
-            <Button onClick={handleClear} color="error" variant="contained">Clear History</Button>
-          </DialogActions>
-        </Dialog>
-
+        <ClearHistoryDialog
+          confirmValue={clearConfirm}
+          onCancel={() => setClearOpen(false)}
+          onConfirm={handleClear}
+          onConfirmValueChange={setClearConfirm}
+          open={clearOpen}
+        />
+        <LogsPanel
+          logRef={logRef}
+          logs={logs}
+          logsMinimized={logsMinimized}
+          setLogsMinimized={setLogsMinimized}
+          setShowAllLogs={setShowAllLogs}
+          showAllLogs={showAllLogs}
+          visibleLogs={visibleLogs}
+        />
       </Box>
     </ThemeProvider>
   );

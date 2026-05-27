@@ -6,6 +6,7 @@ import react from '@vitejs/plugin-react'
 // Convert module scripts to deferred classic scripts and strip crossorigin.
 const stripModuleType: Plugin = {
   name: 'strip-module-type',
+  apply: 'build',
   transformIndexHtml(html) {
     return html
       .replace(/ type="module"/g, ' defer')
@@ -16,6 +17,15 @@ const stripModuleType: Plugin = {
 export default defineConfig({
   base: './',
   plugins: [react(), stripModuleType],
+  server: {
+    proxy: {
+      '/temporal-api': {
+        target: 'http://127.0.0.1:8233',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/temporal-api/, ''),
+      },
+    },
+  },
   build: {
     outDir: 'dist',
     emptyOutDir: true,
