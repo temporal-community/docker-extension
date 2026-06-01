@@ -3,7 +3,7 @@
 # Extension image
 IMAGE_NAME := temporalio/temporal_docker_extension
 LOCAL_VALIDATE_IMAGE := temporal-temporal-extension-unpublished
-VERSION ?= 1.0.6
+VERSION ?= 1.0.7
 
 build:
 	docker build --build-arg VERSION=$(VERSION) \
